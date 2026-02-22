@@ -1,88 +1,106 @@
 import time
-import math 
-import random 
+import math
+import random
 import argparse
+import requests  
 from datetime import datetime, timezone
-
-
-# This returns current UTC time in ISO format 
 def now_iso():
+    # Returns current UTC timestamp in ISO format
     return datetime.now(timezone.utc).isoformat()
-# To generate a realistic sensor value
+
+
 def generate_value(t):
-    base = 25 # the baseline temp (constant center value)
-    amplitude = 2 # how high and low the wave will oscillate
-    period = 60 # one full sine wave cycle takes 60 seconds
-    noise = random.gauss(0, 0.2) # small random variation (mean = 0, std = 0.2)
+    # Baseline smooth physical signal
+    base = 25
+    amplitude = 2
+    period = 60
+    noise = random.gauss(0, 0.2)
 
-    # this creates smooth oscillation like real temp
     wave = amplitude * math.sin(2 * math.pi * t / period)
-
-    # final sensor value:
-    # base level + smooth oscillation + small random noise
     return base + wave + noise
 
-# We need controlled attack modes to test detection later
-# each aatack changes the data in a predictable way
+
 def apply_attack(mode, value, t):
-    # Attack 1: injection 
-    # Reason: Simulates sudden malicious spikes (common use in naive sensor spoofing)
+    # Simulate malicious injection spike
     if mode == "inject":
-        # Every ~15 secs, add a big spike
-        # int(t) turns elapsed time into whole seconds so the trigger is stable
         if int(t) % 15 == 0:
             return value + 15
         return value
-    
-    # Attack 2: drift
-    # Reason: to simulate stealthy manipulation that looks "normal" at first
-    # this is harder to catch with simple thresholds
+
+    # Simulate slow stealth drift
     if mode == "drift":
         return value + (0.02 * t)
-    
-    # no attack 
-    return value 
 
+    return value
+
+
+
+# Function to send data to backend
+
+def post_reading(url, payload):
+    """
+    Sends JSON payload to FastAPI backend.
+    Returns (success_boolean, response_or_error).
+    """
+    try:
+        # Send POST request with JSON body
+        r = requests.post(url, json=payload, timeout=3)
+
+        #  Raise error if status code is not 200
+        r.raise_for_status()
+
+        return True, r.json()
+
+    except requests.RequestException as e:
+        return False, str(e)
 
 
 def main():
-    # Need argparse to change behavior without editing the code
-    # this is cleaner for testing, automation, running multiple terminals, and later CI
     parser = argparse.ArgumentParser()
+
+    parser.add_argument("--attack", choices=["none", "inject", "drift"], default="none")
+    parser.add_argument("--interval", type=float, default=1.0)
+    parser.add_argument("--sensor-id", default="sensor-001")
+
+    
+    # NEW: API URL argument
+    
     parser.add_argument(
-        "--attack",
-        choices=["none", "inject", "drift"],
-        default="none",
-        help="Select attack mode for the stream"
+        "--api-url",
+        default="http://127.0.0.1:8000/sensor-data"
     )
-    parser.add_argument(
-        "--interval",
-        type=float,
-        default=1.0,
-        help="Seconds between readings"
-    )
+
     args = parser.parse_args()
 
-    start = time.time() # store the starting time once 
+    start = time.time()
 
-    while True:  # infinite loop, simulates real sensor streaming 
-        t = time.time() - start # this tells how many seconds have passed
+    while True:
+        t = time.time() - start
+        value = generate_value(t)
+        value = apply_attack(args.attack, value, t)
 
-        value = generate_value(t) # computes sensor reading 
-        value = apply_attack(args.attack, value, t) # optional tampering
-
+        
+        # Payload structured to match FastAPI model
+       
         payload = {
-        "timestamp": now_iso(),
-        "value": round(value, 3),
-        "attack": args.attack
+            "timestamp": now_iso(),
+            "value": round(value, 3),
+            "attack": args.attack,
+            "sensor_id": args.sensor_id,
         }
 
+        
+        # NEW: Send data to backend instead of just printing
+        
+        ok, result = post_reading(args.api_url, payload)
 
-        print(payload) # prints the sensor reading to the terminal 
-        time.sleep(args.interval) # controls the sampling rate
+        if ok:
+            print(f"POST ok | value={payload['value']} | attack={payload['attack']}")
+        else:
+            print(f"POST failed | {result}")
+
+        time.sleep(args.interval)
 
 
-# only runs main() if this file is executed directly 
-# not if it is imported as a module
 if __name__ == "__main__":
     main()
