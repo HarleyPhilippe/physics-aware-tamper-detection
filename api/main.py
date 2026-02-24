@@ -3,42 +3,70 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
-app = FastAPI(title="Physics Sensor Backend", version="0.1.0")
+# to create FastAPI app instance
+app = FastAPI()
 
-# In-memory storage for now (fast MVP)
-READINGS: List[dict] = []
+# In meomory storage
+READINGS = []
 
+# Stores last reading per sensor_id 
+LAST_BY_SENSOR = {}
 
+# Data model for incoming sensor data 
 class SensorReading(BaseModel):
-    timestamp: str = Field(..., description="ISO 8601 UTC timestamp")
-    value: float = Field(..., description="Sensor value")
-    attack: str = Field("none", description="Attack mode label for testing")
-    sensor_id: str = Field("sensor-001", description="Sensor identifier")
+    timestamp: datetime
+    value: float 
+    attack: str 
+    sensor_id: str
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "count": len(READINGS)}
-
-
+# Health check endpoint
 @app.post("/sensor-data")
 def ingest(reading: SensorReading):
-    # Basic sanity check: timestamp should be parseable
-    # We store the original string, but parsing here helps catch malformed payloads early
-    datetime.fromisoformat(reading.timestamp.replace("Z", "+00:00"))
 
-    record = reading.model_dump()
-    READINGS.append(record)
+    # convert model to dictionary 
+    data = reading.model_dump()
+
+    # store in global readings list 
+    READINGS.append(data)
+
+    # update last reading per sensor 
+    LAST_BY_SENSOR[reading.sensor_id] = data
 
     return {
         "stored": True,
-        "count": len(READINGS),
-        "latest": record
+        "sensor_id": reading.sensor_id,
+        "total_readings": len(READINGS)
     }
 
-
+# get latest reading per sensor
 @app.get("/sensor-data/latest")
-def latest():
-    if not READINGS:
-        return {"latest": None}
-    return {"latest": READINGS[-1]}
+def latest(sensor_id: Optional[str] = None):
+    
+    # if specific sensor requested 
+    if sensor_id:
+        return {
+            "sensor_id": sensor_id,
+            "latest_reading": LAST_BY_SENSOR.get(sensor_id)
+        }
+    
+    # if no sensor specified, return all latest
+    return {
+        "all_latest": LAST_BY_SENSOR
+    }
+
+# query historical readings
+@app.get("/sensor-data")
+def get_readings(sensor_id: Optional[str] = None, limit: int = 50):
+
+    # filter by sensor if provided 
+    if sensor_id:
+       filtered = [r for r in READINGS if r["Sensor_id"] == sensor_id]
+    else:
+        filtered = READINGS
+
+        # return last N records
+        return {
+            "counts": len(filtered),
+            "result": filtered[-limit:]
+        }
