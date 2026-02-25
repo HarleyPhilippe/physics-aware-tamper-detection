@@ -24,7 +24,7 @@ class SensorReading(BaseModel):
 HISTORY_BY_SENSOR = {}
 WINDOW_SIZE = 5
 DRIFT_THRESHOLD = 5.0
-
+RATE_THRESHOLD = 0.9
 
 # Health check endpoint
 @app.post("/sensor-data")
@@ -41,6 +41,8 @@ def ingest(reading: SensorReading):
         if delta > THRESHOLD:
             anomaly = True
     
+  
+    
     # Initialize history for sensor if not exists
     if reading.sensor_id not in HISTORY_BY_SENSOR:
         HISTORY_BY_SENSOR[reading.sensor_id] = []
@@ -48,7 +50,10 @@ def ingest(reading: SensorReading):
     history = HISTORY_BY_SENSOR[reading.sensor_id]
 
     # append current value
-    history.append(reading.value)
+    history.append({
+        "value": reading.value,
+        "timestamp": reading.timestamp
+    })
 
     # trim history to window size 
     if len(history) > WINDOW_SIZE:
@@ -56,9 +61,21 @@ def ingest(reading: SensorReading):
     
     # drift detection
     if len(history) == WINDOW_SIZE:
-        drift = abs(history[-1] - history[0])
-        if drift > DRIFT_THRESHOLD:
-            anomaly = True
+        value_delta = history[-1]["value"] - history[0]["value"]
+
+        time_delta = (
+            history[-1]["timestamp"] - history[0]["timestamp"]
+        ).total_seconds()
+
+        if time_delta > 0:
+            drift = abs(value_delta)
+            rate = abs(value_delta / time_delta)
+
+            if drift > DRIFT_THRESHOLD:
+                anomaly = True
+            
+            if rate > RATE_THRESHOLD:
+                anomaly = True
 
     # convert model to dictionary
     data = reading.model_dump()
@@ -98,12 +115,14 @@ def get_readings(sensor_id: Optional[str] = None, limit: int = 50):
 
     # filter by sensor if provided 
     if sensor_id:
-       filtered = [r for r in READINGS if r["Sensor_id"] == sensor_id]
+       filtered = [r for r in READINGS if r["sensor_id"] == sensor_id]
     else:
         filtered = READINGS
 
         # return last N records
         return {
             "counts": len(filtered),
-            "result": filtered[-limit:]
+            "result": filtered[-limit:] 
+            
+            
     }
