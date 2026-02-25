@@ -20,6 +20,12 @@ class SensorReading(BaseModel):
     sensor_id: str
 
 
+# global state additions for detection logic
+HISTORY_BY_SENSOR = {}
+WINDOW_SIZE = 5
+DRIFT_THRESHOLD = 5.0
+
+
 # Health check endpoint
 @app.post("/sensor-data")
 def ingest(reading: SensorReading):
@@ -33,6 +39,25 @@ def ingest(reading: SensorReading):
         THRESHOLD = 3.0
 
         if delta > THRESHOLD:
+            anomaly = True
+    
+    # Initialize history for sensor if not exists
+    if reading.sensor_id not in HISTORY_BY_SENSOR:
+        HISTORY_BY_SENSOR[reading.sensor_id] = []
+
+    history = HISTORY_BY_SENSOR[reading.sensor_id]
+
+    # append current value
+    history.append(reading.value)
+
+    # trim history to window size 
+    if len(history) > WINDOW_SIZE:
+        history.pop(0)
+    
+    # drift detection
+    if len(history) == WINDOW_SIZE:
+        drift = abs(history[-1] - history[0])
+        if drift > DRIFT_THRESHOLD:
             anomaly = True
 
     # convert model to dictionary
@@ -81,4 +106,4 @@ def get_readings(sensor_id: Optional[str] = None, limit: int = 50):
         return {
             "counts": len(filtered),
             "result": filtered[-limit:]
-        }
+    }
