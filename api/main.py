@@ -25,6 +25,10 @@ HISTORY_BY_SENSOR = {}
 WINDOW_SIZE = 5
 DRIFT_THRESHOLD = 5.0
 RATE_THRESHOLD = 0.9
+MIN_VALUE = 10.0
+MAX_VALUE = 40.0
+MAX_PHYSICAL_RATE = 2.0
+
 
 # Health check endpoint
 @app.post("/sensor-data")
@@ -34,33 +38,35 @@ def ingest(reading: SensorReading):
 
     previous = LAST_BY_SENSOR.get(reading.sensor_id)
 
+    # Layer 1: Instant spike detection
     if previous:
         delta = abs(reading.value - previous["value"])
-        THRESHOLD = 3.0
-
-        if delta > THRESHOLD:
+        if delta > 3.0:
             anomaly = True
-    
-  
-    
-    # Initialize history for sensor if not exists
+
+    # Layer 4: Hard physical bounds
+    if reading.value < MIN_VALUE or reading.value > MAX_VALUE:
+        anomaly = True
+
+    # Initialize history if needed
     if reading.sensor_id not in HISTORY_BY_SENSOR:
         HISTORY_BY_SENSOR[reading.sensor_id] = []
 
     history = HISTORY_BY_SENSOR[reading.sensor_id]
 
-    # append current value
+    # Append structured history entry
     history.append({
         "value": reading.value,
         "timestamp": reading.timestamp
     })
 
-    # trim history to window size 
+    # Keep window fixed size
     if len(history) > WINDOW_SIZE:
         history.pop(0)
-    
-    # drift detection
+
+    # Window-based logic (Layers 2, 3, 5)
     if len(history) == WINDOW_SIZE:
+
         value_delta = history[-1]["value"] - history[0]["value"]
 
         time_delta = (
@@ -68,23 +74,27 @@ def ingest(reading: SensorReading):
         ).total_seconds()
 
         if time_delta > 0:
+
             drift = abs(value_delta)
             rate = abs(value_delta / time_delta)
 
+            # Layer 2: Drift threshold
             if drift > DRIFT_THRESHOLD:
                 anomaly = True
-            
+
+            # Layer 3: Rate-of-change threshold
             if rate > RATE_THRESHOLD:
                 anomaly = True
 
-    # convert model to dictionary
-    data = reading.model_dump()
+            # Layer 5: Physics maximum rate
+            if rate > MAX_PHYSICAL_RATE:
+                anomaly = True
 
-    # attach anomaly flag to dictionary
+    # Convert model to dictionary
+    data = reading.model_dump()
     data["anomaly"] = anomaly
 
     READINGS.append(data)
-
     LAST_BY_SENSOR[reading.sensor_id] = data
 
     return {
@@ -125,4 +135,4 @@ def get_readings(sensor_id: Optional[str] = None, limit: int = 50):
             "result": filtered[-limit:] 
             
             
-    }
+        }
