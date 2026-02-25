@@ -24,13 +24,25 @@ class SensorReading(BaseModel):
 @app.post("/sensor-data")
 def ingest(reading: SensorReading):
 
-    # convert model to dictionary 
+    anomaly = False
+
+    previous = LAST_BY_SENSOR.get(reading.sensor_id)
+
+    if previous:
+        delta = abs(reading.value - previous["value"])
+        THRESHOLD = 3.0
+
+        if delta > THRESHOLD:
+            anomaly = True
+
+    # convert model to dictionary
     data = reading.model_dump()
 
-    # store in global readings list 
+    # attach anomaly flag to dictionary
+    data["anomaly"] = anomaly
+
     READINGS.append(data)
 
-    # update last reading per sensor 
     LAST_BY_SENSOR[reading.sensor_id] = data
 
     return {
