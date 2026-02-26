@@ -21,15 +21,14 @@ def generate_value(t):
 
 
 def apply_attack(mode, value, t):
-    # Simulate malicious injection spike
+    # Simulate malicious injection spike (now to be persisistent))
     if mode == "inject":
-        if int(t) % 15 == 0:
-            return value + 15
-        return value
+        # add consistent offset to simulate compromised sensor
+        return value + 8
 
     # Simulate slow stealth drift
     if mode == "drift":
-        return value + (0.02 * t)
+        return value + (0.05 * t)
 
     return value
 

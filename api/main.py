@@ -34,6 +34,9 @@ SUSPICIOUS_THRESHOLD = 3
 COMPROMISED_THRESHOLD = 6
 DECAY_AMOUNT = 1
 DETECTION_STATS = {}
+BASELINE_WINDOW = 30
+BASELINE_THRESHOLD = 4.0
+BASELINE_HISTORY = {}
 
 # Health check endpoint
 @app.post("/sensor-data")
@@ -64,6 +67,30 @@ def ingest(reading: SensorReading):
         "value": reading.value,
         "timestamp": reading.timestamp
     })
+
+    # --- Baseline history (detection)---
+    if reading.sensor_id not in BASELINE_HISTORY:
+        BASELINE_HISTORY[reading.sensor_id] = []
+
+    baseline = BASELINE_HISTORY[reading.sensor_id]
+
+    # Only perform baseline detection if we have enough data
+    if len(baseline) == BASELINE_WINDOW:
+
+        mean = sum(baseline) / len(baseline)
+        variance = sum((x - mean) ** 2 for x in baseline) / len(baseline)
+        stddev = variance ** 0.5
+
+        if stddev > 0:
+            if abs(reading.value - mean) > BASELINE_THRESHOLD * stddev:
+                anomaly = True
+
+    # --- Baseline update (protect against poisoning) ---
+    if not anomaly:
+        baseline.append(reading.value)
+        if len(baseline) > BASELINE_WINDOW:
+            baseline.pop(0)
+
 
     # Keep window fixed size
     if len(history) > WINDOW_SIZE:
