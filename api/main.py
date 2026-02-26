@@ -28,7 +28,11 @@ RATE_THRESHOLD = 0.9
 MIN_VALUE = 10.0
 MAX_VALUE = 40.0
 MAX_PHYSICAL_RATE = 2.0
-
+ANOMALY_SCORE_BY_SENSOR = {}
+SENSOR_STATE = {}
+SUSPICIOUS_THRESHOLD = 3
+COMPROMISED_THRESHOLD = 6
+DECAY_AMOUNT = 1
 
 # Health check endpoint
 @app.post("/sensor-data")
@@ -90,6 +94,35 @@ def ingest(reading: SensorReading):
             if rate > MAX_PHYSICAL_RATE:
                 anomaly = True
 
+    # --- Sensor level scoring with decay ---
+    if reading.sensor_id not in ANOMALY_SCORE_BY_SENSOR:
+        ANOMALY_SCORE_BY_SENSOR[reading.sensor_id] = 0
+    
+    score = ANOMALY_SCORE_BY_SENSOR[reading.sensor_id]
+
+    if anomaly:
+        score += 1
+    else:
+        score -= DECAY_AMOUNT
+
+    # Prevent negative scores
+    if score < 0:
+        score = 0
+    
+    ANOMALY_SCORE_BY_SENSOR[reading.sensor_id] = score
+
+    # Determine sensor state
+    if score >= COMPROMISED_THRESHOLD:
+        state = "COMPROMISED"
+    elif score >= SUSPICIOUS_THRESHOLD:
+        state = "SUSPICIOUS"
+    else:
+        state = "NORMAL"
+
+    SENSOR_STATE[reading.sensor_id] = state
+
+
+
     # Convert model to dictionary
     data = reading.model_dump()
     data["anomaly"] = anomaly
@@ -111,6 +144,8 @@ def latest(sensor_id: Optional[str] = None):
     if sensor_id:
         return {
             "sensor_id": sensor_id,
+            "state": SENSOR_STATE.get(sensor_id, "NORMAL"),
+            "score": ANOMALY_SCORE_BY_SENSOR.get(sensor_id, 0),
             "latest_reading": LAST_BY_SENSOR.get(sensor_id)
         }
     
