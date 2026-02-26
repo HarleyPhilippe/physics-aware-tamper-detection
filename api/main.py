@@ -33,6 +33,7 @@ SENSOR_STATE = {}
 SUSPICIOUS_THRESHOLD = 3
 COMPROMISED_THRESHOLD = 6
 DECAY_AMOUNT = 1
+DETECTION_STATS = {}
 
 # Health check endpoint
 @app.post("/sensor-data")
@@ -100,6 +101,25 @@ def ingest(reading: SensorReading):
     
     score = ANOMALY_SCORE_BY_SENSOR[reading.sensor_id]
 
+    # --- initialize detection stats if needed ---
+    if reading.sensor_id not in DETECTION_STATS:
+        DETECTION_STATS[reading.sensor_id] = {
+            "total_readings": 0,
+            "anomaly_count": 0,
+            "suspicious_transitions": 0,
+            "compromised_transitions": 0
+        }
+
+    stats = DETECTION_STATS[reading.sensor_id]
+
+    # Increment total readings
+    stats["total_readings"] += 1
+
+    # Increment anomaly counter
+    if anomaly:
+        stats["anomaly_count"] += 1
+
+
     if anomaly:
         score += 1
     else:
@@ -118,6 +138,16 @@ def ingest(reading: SensorReading):
         state = "SUSPICIOUS"
     else:
         state = "NORMAL"
+
+    
+    previous_state = SENSOR_STATE.get(reading.sensor_id, "NORMAL")
+
+    # track state transitions
+    if previous_state != state:
+        if state == "SUSPICIOUS":
+            stats["suspicious_transitions"] += 1
+        elif state == "COMPROMISED":
+            stats["compromised_transitions"] += 1
 
     SENSOR_STATE[reading.sensor_id] = state
 
@@ -171,3 +201,17 @@ def get_readings(sensor_id: Optional[str] = None, limit: int = 50):
             
             
         }
+    
+# Stats endpoint 
+@app.get("/sensor-data/stats")
+def get_stats(sensor_id: Optional[str] = None):
+
+    if sensor_id:
+        return {
+            "sensor_id": sensor_id,
+            "stats": DETECTION_STATS.get(sensor_id, {})
+        }
+        
+    return {
+        "all_stats": DETECTION_STATS
+    }
