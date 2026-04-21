@@ -21,7 +21,7 @@ def generate_value(t):
 
 
 def apply_attack(mode, value, t):
-    # Simulate malicious injection spike (now to be persisistent))
+    # Simulate malicious injection spike (now to be persistent)
     if mode == "inject":
         # add consistent offset to simulate compromised sensor
         return value + 8

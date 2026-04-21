@@ -6,7 +6,7 @@ from datetime import datetime
 # to create FastAPI app instance
 app = FastAPI()
 
-# In meomory storage
+# In memory storage
 READINGS = []
 
 # Stores last reading per sensor_id 
@@ -32,10 +32,10 @@ ANOMALY_SCORE_BY_SENSOR = {}
 SENSOR_STATE = {}
 SUSPICIOUS_THRESHOLD = 3
 COMPROMISED_THRESHOLD = 6
-DECAY_AMOUNT = 1
+DECAY_AMOUNT = 1.0
 DETECTION_STATS = {}
-BASELINE_WINDOW = 30
-BASELINE_THRESHOLD = 4.0
+BASELINE_WINDOW = 60
+BASELINE_THRESHOLD = 5.0
 BASELINE_HISTORY = {}
 
 # Health check endpoint
@@ -43,6 +43,11 @@ BASELINE_HISTORY = {}
 def ingest(reading: SensorReading):
 
     anomaly = False
+    spike_triggered = False
+    baseline_triggered = False
+    drift_triggered = False
+    rate_triggered = False
+    physics_triggered = False
 
     previous = LAST_BY_SENSOR.get(reading.sensor_id)
 
@@ -51,10 +56,13 @@ def ingest(reading: SensorReading):
         delta = abs(reading.value - previous["value"])
         if delta > 3.0:
             anomaly = True
+            spike_triggered = True
 
-    # Layer 4: Hard physical bounds
+   # Layer 4: Hard physical bounds
     if reading.value < MIN_VALUE or reading.value > MAX_VALUE:
         anomaly = True
+        physics_triggered = True
+    
 
     # Initialize history if needed
     if reading.sensor_id not in HISTORY_BY_SENSOR:
@@ -74,6 +82,8 @@ def ingest(reading: SensorReading):
 
     baseline = BASELINE_HISTORY[reading.sensor_id]
 
+    baseline_ready = len(baseline) >= BASELINE_WINDOW
+
     # Only perform baseline detection if we have enough data
     if len(baseline) == BASELINE_WINDOW:
 
@@ -82,14 +92,24 @@ def ingest(reading: SensorReading):
         stddev = variance ** 0.5
 
         if stddev > 0:
-            if abs(reading.value - mean) > BASELINE_THRESHOLD * stddev:
+            tolerance = max(BASELINE_THRESHOLD * stddev, 1.5)  # Ensure minimum tolerance
+            
+            if abs(reading.value - mean) > tolerance:
                 anomaly = True
+                baseline_triggered = True
+        
 
-    # --- Baseline update (protect against poisoning) ---
-    if not anomaly:
-        baseline.append(reading.value)
-        if len(baseline) > BASELINE_WINDOW:
-            baseline.pop(0)
+    # --- Baseline update (allow training phase) ---
+    if len(baseline) < BASELINE_WINDOW:
+    # Initial training phase (only clean data)
+        if reading.attack == "none":
+            baseline.append(reading.value)
+    else:
+        # After baseline is trained, this is to protect it 
+       if reading.attack == "none" and not anomaly:
+            baseline.append(reading.value)
+            if len(baseline) > BASELINE_WINDOW:
+                 baseline.pop(0)
 
 
     # Keep window fixed size
@@ -113,14 +133,17 @@ def ingest(reading: SensorReading):
             # Layer 2: Drift threshold
             if drift > DRIFT_THRESHOLD:
                 anomaly = True
+                drift_triggered = True
 
             # Layer 3: Rate-of-change threshold
             if rate > RATE_THRESHOLD:
                 anomaly = True
+                rate_triggered = True
 
             # Layer 5: Physics maximum rate
             if rate > MAX_PHYSICAL_RATE:
                 anomaly = True
+                physics_triggered = True
 
     # --- Sensor level scoring with decay ---
     if reading.sensor_id not in ANOMALY_SCORE_BY_SENSOR:
@@ -158,13 +181,21 @@ def ingest(reading: SensorReading):
     
     ANOMALY_SCORE_BY_SENSOR[reading.sensor_id] = score
 
-    # Determine sensor state
+    # Determine sensor state with hysteresis
+    previous_state = SENSOR_STATE.get(reading.sensor_id, "NORMAL")
+
     if score >= COMPROMISED_THRESHOLD:
         state = "COMPROMISED"
     elif score >= SUSPICIOUS_THRESHOLD:
         state = "SUSPICIOUS"
     else:
-        state = "NORMAL"
+        # recovery logic 
+        if previous_state == "COMPROMISED" and score > (COMPROMISED_THRESHOLD - 1):
+            state = "SUSPICIOUS"
+        elif previous_state == "SUSPICIOUS" and score > 0:
+            state = "SUSPICIOUS"
+        else:
+            state = "NORMAL"
 
     
     previous_state = SENSOR_STATE.get(reading.sensor_id, "NORMAL")
@@ -183,6 +214,17 @@ def ingest(reading: SensorReading):
     # Convert model to dictionary
     data = reading.model_dump()
     data["anomaly"] = anomaly
+    data["score"] = score
+
+    data["reason" ] = {
+        "spike": spike_triggered,
+        "baseline": baseline_triggered,
+        "drift": drift_triggered,
+        "rate": rate_triggered,
+        "physics": physics_triggered
+    }
+
+    data["baseline_ready"] = baseline_ready
 
     READINGS.append(data)
     LAST_BY_SENSOR[reading.sensor_id] = data
@@ -197,16 +239,17 @@ def ingest(reading: SensorReading):
 @app.get("/sensor-data/latest")
 def latest(sensor_id: Optional[str] = None):
     
-    # if specific sensor requested 
     if sensor_id:
+        latest = LAST_BY_SENSOR.get(sensor_id)
+
         return {
             "sensor_id": sensor_id,
             "state": SENSOR_STATE.get(sensor_id, "NORMAL"),
             "score": ANOMALY_SCORE_BY_SENSOR.get(sensor_id, 0),
-            "latest_reading": LAST_BY_SENSOR.get(sensor_id)
+            "baseline_ready": latest.get("baseline_ready") if latest else False,
+            "latest_reading": latest
         }
     
-    # if no sensor specified, return all latest
     return {
         "all_latest": LAST_BY_SENSOR
     }
@@ -215,19 +258,15 @@ def latest(sensor_id: Optional[str] = None):
 @app.get("/sensor-data")
 def get_readings(sensor_id: Optional[str] = None, limit: int = 50):
 
-    # filter by sensor if provided 
     if sensor_id:
-       filtered = [r for r in READINGS if r["sensor_id"] == sensor_id]
+        filtered = [r for r in READINGS if r["sensor_id"] == sensor_id]
     else:
         filtered = READINGS
 
-        # return last N records
-        return {
-            "counts": len(filtered),
-            "result": filtered[-limit:] 
-            
-            
-        }
+    return {
+        "counts": len(filtered),
+        "result": filtered[-limit:]
+    }
     
 # Stats endpoint 
 @app.get("/sensor-data/stats")
@@ -241,4 +280,25 @@ def get_stats(sensor_id: Optional[str] = None):
         
     return {
         "all_stats": DETECTION_STATS
+    }
+
+# System status endpoint
+@app.get("/system/status")
+def system_status():
+    counts = {"NORMAL": 0, "SUSPICIOUS": 0, "COMPROMISED": 0}
+
+    for state in SENSOR_STATE.values():
+        counts[state] += 1
+
+    return {
+        "total_sensors": len(SENSOR_STATE),
+        "state_counts": counts,
+        "sensors": [
+            {
+                "sensor_id": sid,
+                "state": SENSOR_STATE[sid],
+                "score": ANOMALY_SCORE_BY_SENSOR.get(sid, 0)
+            }
+            for sid in SENSOR_STATE
+        ]
     }
