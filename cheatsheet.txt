@@ -1,0 +1,8 @@
+1. python -m uvicorn api.main:app --reload --port 8000
+2.  python sensor/simulate.py --attack none --sensor-id sensor-002
+3. curl "http://127.0.0.1:8000/sensor-data/latest?sensor_id=sensor-002"
+4. python sensor/simulate.py --attack inject --sensor-id sensor-002
+5. curl "http://127.0.0.1:8000/system/status"
+6. python visualize.py
+7. python sensor/simulate.py --attack none --sensor-id sensor-002
+8. curl "http://127.0.0.1:8000/system/status"
